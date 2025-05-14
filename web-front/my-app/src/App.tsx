@@ -8,8 +8,12 @@ function App() {
   return (
     <div>
       <Header />
-      <h1 className="text-2xl font-bold mb-4">Network Topology Demo</h1>
-      <Topology />
+      <h1 className="text-2xl font-bold mb-4 text-center">Network Topology Demo</h1>
+      <div>
+        <div className="Topology">
+        <Topology />
+        </div>
+      </div>
     </div>
   );
 }

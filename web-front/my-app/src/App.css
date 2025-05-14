@@ -32,6 +32,12 @@
   color: #61dafb;
 }
 
+.Topology {
+  width: 70%;
+  height: 50rem;
+  align-items: center;
+}
+
 @keyframes App-logo-spin {
   from {
     transform: rotate(0deg);

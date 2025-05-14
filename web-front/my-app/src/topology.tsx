@@ -91,7 +91,7 @@ const Topology = () => {
   return (
     <div
       ref={containerRef}
-      className="w-full h-80 border border-gray-300 rounded-lg shadow"
+      className="w-full h-full border border-gray-300 rounded-lg shadow"
     />
   );
 };

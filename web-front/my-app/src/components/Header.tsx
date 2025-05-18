@@ -6,7 +6,7 @@ import { logout } from '../store/authSlice';
 import './Header.css';
 
 interface HeaderProps {
-  onMenuItemClick: (view: 'main' | 'scan' | 'features' | 'marketplace' | 'company') => void;
+  onMenuItemClick: (view: 'main' | 'scan') => void;
 }
 
 const Header: React.FC<HeaderProps> = ({ onMenuItemClick }) => {
@@ -32,9 +32,6 @@ const Header: React.FC<HeaderProps> = ({ onMenuItemClick }) => {
         <nav className="nav-menu">
           <button onClick={() => onMenuItemClick('main')}>홈</button>
           <button onClick={() => onMenuItemClick('scan')}>스캔</button>
-          <button onClick={() => onMenuItemClick('features')}>기능</button>
-          <button onClick={() => onMenuItemClick('marketplace')}>마켓플레이스</button>
-          <button onClick={() => onMenuItemClick('company')}>회사 정보</button>
         </nav>
         <div className="user-menu">
           {user ? (

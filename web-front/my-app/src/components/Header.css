@@ -1,0 +1,94 @@
+.header {
+  background-color: white;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 1rem 0;
+}
+
+.header-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.logo h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1f2937;
+  margin: 0;
+}
+
+.nav-menu {
+  display: flex;
+  gap: 1rem;
+}
+
+.nav-menu button {
+  background: none;
+  border: none;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  color: #4b5563;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.nav-menu button:hover {
+  color: #3b82f6;
+}
+
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.username {
+  color: #4b5563;
+  font-weight: 500;
+}
+
+.login-button,
+.logout-button,
+.guest-button {
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.login-button {
+  background-color: #3b82f6;
+  color: white;
+  border: none;
+}
+
+.login-button:hover {
+  background-color: #2563eb;
+}
+
+.logout-button {
+  background-color: #f3f4f6;
+  color: #4b5563;
+  border: 1px solid #d1d5db;
+}
+
+.logout-button:hover {
+  background-color: #e5e7eb;
+}
+
+.guest-button {
+  background-color: #f3f4f6;
+  color: #4b5563;
+  border: 1px solid #d1d5db;
+}
+
+.guest-button:hover {
+  background-color: #e5e7eb;
+}
+
+ 

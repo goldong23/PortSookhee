@@ -1,0 +1,43 @@
+.main-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-content {
+  flex: 1;
+  background-color: #f9fafb;
+  padding: 2rem;
+}
+
+.main-view-content {
+  height: calc(100vh - 4rem);
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.topology-area {
+  position: relative;
+  background-color: #f9fafb;
+}
+
+.scan-view-content,
+.features-view-content,
+.marketplace-view-content,
+.company-view-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  background-color: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.view-heading {
+  color: #1f2937;
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 1.5rem;
+} 

@@ -1,0 +1,50 @@
+.topology-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: #f9fafb;
+}
+
+.controls-panel {
+  padding: 1rem;
+  background-color: white;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.controls-panel h4 {
+  margin: 0 0 0.5rem 0;
+  color: #1f2937;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.controls-panel button {
+  margin-right: 0.5rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background-color: white;
+  color: #4b5563;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.controls-panel button:hover:not(:disabled) {
+  background-color: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+.controls-panel button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.topology-graph {
+  flex: 1;
+  min-height: 500px;
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  margin: 1rem;
+} 

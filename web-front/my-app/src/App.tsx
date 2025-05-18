@@ -1,21 +1,18 @@
 import React from 'react';
-import Header from './Page/Header/Header';
-import Topology from './topology';
-
+import { BrowserRouter as Router } from 'react-router-dom';
+import { Provider } from 'react-redux';
+import { store } from './store';
+import AppRoutes from './routes';
 import './App.css';
 
-function App() {
+const App: React.FC = () => {
   return (
-    <div>
-      <Header />
-      <h1 className="text-2xl font-bold mb-4 text-center">Network Topology Demo</h1>
-      <div>
-        <div className="Topology">
-        <Topology />
-        </div>
-      </div>
-    </div>
+    <Provider store={store}>
+      <Router>
+        <AppRoutes />
+      </Router>
+    </Provider>
   );
-}
+};
 
 export default App;

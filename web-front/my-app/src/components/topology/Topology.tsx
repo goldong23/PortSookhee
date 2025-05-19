@@ -4,6 +4,7 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import './Topology.css';
 import TopologyDetailsPanel from './TopologyDetailsPanel';
+import { useOutletContext } from 'react-router-dom';
 
 /**
  * Topology.tsx – fully‑working, self‑debugging demo.
@@ -14,6 +15,38 @@ export interface NodeData {
   type: 'host' | 'router' | 'switch';
   name: string;
   ip?: string;
+  nmapData?: {
+    hostname?: string;
+    mac?: string;
+    macVendor?: string;
+    os?: {
+      name?: string;
+      version?: string;
+      accuracy?: number;
+    };
+    ports?: {
+      port: number;
+      protocol: 'tcp' | 'udp';
+      state: 'open' | 'closed' | 'filtered';
+      service: string;
+      product?: string;
+      version?: string;
+    }[];
+    scripts?: {
+      name: string;
+      output: string;
+    }[];
+    uptime?: {
+      seconds: number;
+      lastBoot?: string;
+    };
+    distance?: number;
+    tcpSequence?: {
+      class: string;
+      difficulty: string;
+    };
+    lastScanTime?: string;
+  };
   vulnerabilities?: {
     severity: 'high' | 'medium' | 'low';
     description: string;
@@ -48,12 +81,16 @@ const SAMPLE_VULNERABILITIES = [
   }
 ];
 
-interface TopologyProps {
-  initialElements?: ElementsDefinition;
+interface OutletContextType {
   onNodeSelect: (node: NodeData | null) => void;
 }
 
-const Topology: React.FC<TopologyProps> = ({ initialElements, onNodeSelect }) => {
+interface TopologyProps {
+  initialElements?: ElementsDefinition;
+}
+
+const Topology: React.FC<TopologyProps> = ({ initialElements }) => {
+  const { onNodeSelect } = useOutletContext<OutletContextType>();
   const containerRef = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<LayoutType>('grid');
   const [nodeShapes, setNodeShapes] = useState<Record<string, NodeShape>>({
@@ -102,6 +139,7 @@ const Topology: React.FC<TopologyProps> = ({ initialElements, onNodeSelect }) =>
       maxZoom: 2.5,
       zoomingEnabled: true,
       userZoomingEnabled: true,
+      wheelSensitivity: 0.3,
       style: [
         {
           selector: 'node',

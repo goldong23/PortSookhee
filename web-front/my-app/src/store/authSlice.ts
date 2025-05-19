@@ -4,6 +4,7 @@ export interface User {
   id: string;
   username: string;
   email?: string;
+  isGuest?: boolean;
 }
 
 export interface AuthState {
@@ -36,7 +37,7 @@ const authSlice = createSlice({
       state.isAuthenticated = false;
     },
     guestLogin: (state) => {
-      state.user = { id: 'guest', username: '비회원', email: '' };
+      state.user = { id: 'guest', username: '비회원', email: '', isGuest: true };
       state.token = null;
       state.isAuthenticated = true;
     },

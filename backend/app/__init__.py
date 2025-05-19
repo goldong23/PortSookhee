@@ -43,14 +43,17 @@ def create_app(config_class=Config):
     # 디버그: 설정된 URI 확인
     logger.info(f"Configured MongoDB URI: {app.config['MONGO_URI']}")
     
-    # Initialize CORS with more permissive settings for development
-    CORS(app, resources={
-        r"/api/*": {
-            "origins": ["http://127.0.0.1:3000", "http://localhost:3000"],
-            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"]
-        }
-    })
+    # CORS 설정 개선 - 단순화하고 모든 리소스에 적용
+    CORS(app, 
+         origins=["*"],  # 모든 출처에서의 요청 허용
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "Origin"],
+         expose_headers=["Content-Length", "X-JSON"],
+         supports_credentials=False  # credentials 지원 비활성화 (CORS 단순화)
+    )
+    
+    # 로그로 CORS 설정 확인
+    logger.info("CORS 설정이 적용되었습니다")
     
     # MongoDB 연결 변수
     global mongodb_available
@@ -121,6 +124,10 @@ def create_app(config_class=Config):
             # Setup database indexes
             setup_database(mongo.db)
             
+            # 앱에 MongoDB 설정 추가 (향후 접근용)
+            app.config['MONGO'] = mongo
+            app.config['MONGO_DB'] = mongo.db
+            
     except Exception as e:
         logger.error(f"Failed to initialize MongoDB: {str(e)}")
         logger.error(f"Exception type: {type(e)}")
@@ -131,9 +138,15 @@ def create_app(config_class=Config):
     # Register blueprints
     from .routes.auth import auth_bp
     from .routes.main import main_bp
+    from .routes.scan_routes import scan_bp
+    from .routes.openvpn_routes import openvpn_bp
+    from .routes.virtual_fit_routes import virtual_fit_bp
     
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(main_bp, url_prefix='/api')
+    app.register_blueprint(scan_bp, url_prefix='/api/scan')
+    app.register_blueprint(openvpn_bp, url_prefix='/api/openvpn')
+    app.register_blueprint(virtual_fit_bp, url_prefix='/api/virtual-fit')
     
     # Request hooks
     @app.before_request

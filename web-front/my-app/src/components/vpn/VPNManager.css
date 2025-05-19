@@ -1,0 +1,406 @@
+.vpn-manager {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.vpn-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.vpn-header h2 {
+  margin: 0;
+  color: #1e40af;
+}
+
+.user-vpn-info {
+  background-color: #f0f9ff;
+  padding: 8px 12px;
+  border-radius: 4px;
+  border-left: 4px solid #3b82f6;
+}
+
+.user-vpn-info p {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #1e40af;
+}
+
+.not-installed-warning {
+  display: flex;
+  align-items: center;
+  background-color: #fff0f0;
+  border: 1px solid #fca5a5;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin-bottom: 20px;
+}
+
+.not-installed-warning p {
+  margin: 0;
+  margin-right: 10px;
+  color: #b91c1c;
+}
+
+.guide-toggle-btn {
+  background-color: transparent;
+  border: 1px solid #b91c1c;
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: #b91c1c;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.guide-toggle-btn:hover {
+  background-color: #fee2e2;
+}
+
+.install-guide {
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 15px;
+  margin-bottom: 20px;
+}
+
+.install-guide h3 {
+  margin-top: 0;
+  color: #111827;
+}
+
+.install-guide ol {
+  margin-left: 0;
+  padding-left: 20px;
+}
+
+.install-guide li {
+  margin-bottom: 8px;
+}
+
+.install-guide code {
+  background-color: #e5e7eb;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.check-installation-btn {
+  background-color: #3b82f6;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 12px;
+  color: white;
+  cursor: pointer;
+  margin-top: 10px;
+}
+
+.check-installation-btn:hover {
+  background-color: #2563eb;
+}
+
+.check-installation-btn:disabled {
+  background-color: #93c5fd;
+  cursor: not-allowed;
+}
+
+.tryhackme-guide {
+  background-color: #ecfdf5;
+  border: 1px solid #6ee7b7;
+  border-radius: 8px;
+  padding: 15px;
+  margin-bottom: 20px;
+}
+
+.tryhackme-guide h3 {
+  margin-top: 0;
+  color: #065f46;
+}
+
+.tryhackme-guide ol {
+  margin-left: 0;
+  padding-left: 20px;
+}
+
+.tryhackme-guide li {
+  margin-bottom: 8px;
+}
+
+.tryhackme-guide a {
+  color: #059669;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.tryhackme-guide a:hover {
+  text-decoration: underline;
+}
+
+.vpn-config-uploader {
+  margin-bottom: 20px;
+}
+
+.vpn-config-uploader h3 {
+  color: #111827;
+  margin-top: 0;
+}
+
+.upload-progress {
+  margin-top: 15px;
+  padding: 10px;
+  background-color: #f0f9ff;
+  border-radius: 6px;
+  border: 1px solid #bfdbfe;
+}
+
+.progress-bar {
+  height: 10px;
+  background-color: #e5e7eb;
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background-color: #3b82f6;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 0.85rem;
+  color: #1e40af;
+  text-align: center;
+}
+
+.form-group {
+  margin-bottom: 15px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 500;
+  color: #4b5563;
+}
+
+.form-group input[type="file"] {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+}
+
+.form-group input[type="text"] {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+}
+
+button {
+  background-color: #3b82f6;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  color: white;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+button:hover {
+  background-color: #2563eb;
+}
+
+button:disabled {
+  background-color: #93c5fd;
+  cursor: not-allowed;
+}
+
+.connection-name {
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.connection-description {
+  font-size: 0.85rem;
+  color: #4b5563;
+  margin-bottom: 4px;
+  font-style: italic;
+}
+
+.connection-status {
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.connection-metadata {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+.connection-metadata span {
+  display: inline-block;
+  margin-right: 8px;
+}
+
+.connection-error {
+  margin-top: 4px;
+  color: #b91c1c;
+  font-size: 0.85rem;
+}
+
+.credentials-input {
+  display: flex;
+  gap: 8px;
+  margin-right: 10px;
+}
+
+.credentials-input input {
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  width: 120px;
+}
+
+.connection-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.connect-btn {
+  background-color: #10b981;
+}
+
+.connect-btn:hover {
+  background-color: #059669;
+}
+
+.connect-btn:disabled {
+  background-color: #6ee7b7;
+}
+
+.delete-btn {
+  background-color: #ef4444;
+}
+
+.delete-btn:hover {
+  background-color: #dc2626;
+}
+
+.delete-btn:disabled {
+  background-color: #fca5a5;
+}
+
+.disconnect-btn {
+  background-color: #ef4444;
+}
+
+.disconnect-btn:hover {
+  background-color: #dc2626;
+}
+
+.disconnect-btn:disabled {
+  background-color: #fca5a5;
+}
+
+.vpn-connections {
+  margin-top: 20px;
+}
+
+.vpn-connections h3 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  color: #111827;
+}
+
+.vpn-connections ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.connection-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+}
+
+.connection-info {
+  flex-grow: 1;
+}
+
+/* 연결 상태별 스타일 */
+.status-connected {
+  border-left: 4px solid #10b981;
+}
+
+.status-connecting {
+  border-left: 4px solid #f59e0b;
+}
+
+.status-disconnected {
+  border-left: 4px solid #6b7280;
+}
+
+.status-failed {
+  border-left: 4px solid #ef4444;
+}
+
+.status-uploaded {
+  border-left: 4px solid #8b5cf6;
+}
+
+.success-message {
+  padding: 10px;
+  background-color: #d1fae5;
+  border: 1px solid #6ee7b7;
+  color: #065f46;
+  border-radius: 4px;
+  margin-top: 15px;
+}
+
+.error-message {
+  padding: 10px;
+  background-color: #fee2e2;
+  border: 1px solid #fca5a5;
+  color: #b91c1c;
+  border-radius: 4px;
+  margin-top: 15px;
+}
+
+.no-connections {
+  background-color: #f9fafb;
+  padding: 16px;
+  border-radius: 6px;
+  border: 1px dashed #d1d5db;
+  text-align: center;
+  margin-top: 20px;
+}
+
+.no-connections p {
+  margin: 0;
+  color: #6b7280;
+} 

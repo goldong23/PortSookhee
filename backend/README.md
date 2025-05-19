@@ -68,6 +68,3 @@ python run.py --debug
 - `FLASK_ENV`: 실행 환경 (development, testing, production)
 - `FLASK_HOST`: 호스트 주소 (기본값: 127.0.0.1)
 - `FLASK_PORT`: 포트 번호 (기본값: 5000)
-- `MONGODB_URL`: MongoDB 연결 URL (기본값: mongodb://165.229.86.157:8080/)
-- `MONGODB_DB`: MongoDB 데이터베이스 이름 (기본값: PortSookhee)
-- `JWT_SECRET`: JWT 토큰 암호화 키 

@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import './TestPage.css';
 
 interface ApiResult {
   success: boolean;
@@ -114,28 +113,55 @@ const TestPage: React.FC = () => {
   };
 
   return (
-    <div className="test-page">
+    <div style={{ 
+      padding: '20px', 
+      maxWidth: '800px', 
+      margin: '0 auto' 
+    }}>
       <h1>API 테스트</h1>
       
-      <div className="test-type-selector">
+      <div style={{ 
+        display: 'flex', 
+        marginBottom: '20px', 
+        gap: '10px' 
+      }}>
         <button 
-          className={`test-type-button ${testType === 'general' ? 'active' : ''}`}
+          style={{ 
+            padding: '8px 16px', 
+            backgroundColor: testType === 'general' ? '#4CAF50' : '#f0f0f0',
+            color: testType === 'general' ? 'white' : 'black',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer'
+          }}
           onClick={() => setTestType('general')}
         >
           일반 API 테스트
         </button>
         <button 
-          className={`test-type-button ${testType === 'virtualFit' ? 'active' : ''}`}
+          style={{ 
+            padding: '8px 16px', 
+            backgroundColor: testType === 'virtualFit' ? '#4CAF50' : '#f0f0f0',
+            color: testType === 'virtualFit' ? 'white' : 'black',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer'
+          }}
           onClick={() => setTestType('virtualFit')}
         >
           Virtual Fit API 테스트
         </button>
       </div>
       
-      <div className="test-container">
+      <div style={{ 
+        border: '1px solid #ddd', 
+        borderRadius: '8px', 
+        padding: '20px',
+        backgroundColor: '#f9f9f9' 
+      }}>
         {testType === 'general' ? (
           // 일반 API 테스트 UI
-          <div className="test-controls">
+          <div style={{ marginBottom: '20px' }}>
             <div>
               <label htmlFor="api-url">API URL:</label>
               <input
@@ -160,7 +186,15 @@ const TestPage: React.FC = () => {
               </select>
             </div>
             <button
-              className="test-button"
+              style={{
+                padding: '10px 16px',
+                backgroundColor: '#4CAF50',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                opacity: loading ? 0.7 : 1
+              }}
               onClick={handleGeneralApiCall}
               disabled={loading}
             >
@@ -169,7 +203,7 @@ const TestPage: React.FC = () => {
           </div>
         ) : (
           // Virtual Fit API 테스트 UI
-          <div className="test-controls">
+          <div style={{ marginBottom: '20px' }}>
             <div>
               <label htmlFor="api-key">API Key:</label>
               <input
@@ -215,33 +249,57 @@ const TestPage: React.FC = () => {
               </select>
             </div>
             <button
-              className="test-button"
+              style={{
+                padding: '10px 16px',
+                backgroundColor: '#4CAF50',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                opacity: loading ? 0.7 : 1
+              }}
               onClick={handleVirtualFitCall}
               disabled={loading}
             >
               {loading ? '가상 피팅 생성 중...' : '가상 피팅 생성하기'}
             </button>
-            <div className="api-instructions">
+            <div style={{ 
+              fontSize: '12px', 
+              color: '#666', 
+              marginTop: '10px' 
+            }}>
               <p>* Segmind API 키가 필요합니다. <a href="https://www.segmind.com/" target="_blank" rel="noopener noreferrer">segmind.com</a>에서 키를 발급받으세요.</p>
             </div>
           </div>
         )}
 
-        <div className="results-container">
+        <div style={{ 
+          marginTop: '20px',
+          border: '1px solid #e0e0e0',
+          borderRadius: '4px',
+          padding: '15px',
+          backgroundColor: '#fff'
+        }}>
           {error && (
-            <div className="error-message">
+            <div style={{
+              backgroundColor: '#ffebee',
+              color: '#c62828',
+              padding: '10px',
+              borderRadius: '4px',
+              marginBottom: '10px'
+            }}>
               <h3>오류 발생</h3>
               <p>{error}</p>
             </div>
           )}
           
           {result && (
-            <div className="result-content">
+            <div style={{ marginTop: '10px' }}>
               <h3>응답 결과</h3>
               
               {/* Virtual Fit API 응답에 이미지가 있는 경우 표시 */}
               {testType === 'virtualFit' && result.success && result.data?.data?.image && (
-                <div className="result-image">
+                <div style={{ marginBottom: '15px' }}>
                   <h4>생성된 이미지:</h4>
                   <img 
                     src={`data:image/png;base64,${result.data.data.image}`} 

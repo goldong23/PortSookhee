@@ -1,4 +1,4 @@
-from flask import Flask, g
+from flask import Flask, g, request, jsonify
 from flask_cors import CORS
 from flask_pymongo import PyMongo
 import os
@@ -43,17 +43,24 @@ def create_app(config_class=Config):
     # 디버그: 설정된 URI 확인
     logger.info(f"Configured MongoDB URI: {app.config['MONGO_URI']}")
     
-    # CORS 설정 개선 - 단순화하고 모든 리소스에 적용
+    # CORS 설정 단순화 - 모든 요청 허용
     CORS(app, 
-         origins=["*"],  # 모든 출처에서의 요청 허용
-         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-         allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "Origin"],
-         expose_headers=["Content-Length", "X-JSON"],
-         supports_credentials=False  # credentials 지원 비활성화 (CORS 단순화)
+         resources={r"/*": {"origins": "*"}},
+         supports_credentials=False,
+         send_wildcard=True
     )
     
     # 로그로 CORS 설정 확인
-    logger.info("CORS 설정이 적용되었습니다")
+    logger.info("CORS 설정이 적용되었습니다 (모든 출처 및 헤더 허용)")
+    
+    # 기본 라우트 추가 (서버 상태 확인용)
+    @app.route('/api/', methods=['GET', 'HEAD', 'OPTIONS'])
+    def health_check():
+        """서버 상태 확인 엔드포인트"""
+        if request.method == 'OPTIONS':
+            # CORS 프리플라이트 요청 처리
+            return '', 200
+        return jsonify({'status': 'ok', 'message': 'Server is running'})
     
     # MongoDB 연결 변수
     global mongodb_available
@@ -133,26 +140,90 @@ def create_app(config_class=Config):
         logger.error(f"Exception type: {type(e)}")
         logger.error(f"Stack trace:", exc_info=True)
         mongodb_available = False
-        raise  # 에러를 상위로 전파하여 앱 시작을 중단
+        # 심각한 오류가 아니면 앱 시작 계속 진행
+        logger.warning("MongoDB 연결에 실패했지만 앱은 계속 실행됩니다. 일부 기능이 제한될 수 있습니다.")
     
     # Register blueprints
     from .routes.auth import auth_bp
     from .routes.main import main_bp
     from .routes.scan_routes import scan_bp
     from .routes.openvpn_routes import openvpn_bp
-    from .routes.virtual_fit_routes import virtual_fit_bp
+    # from .routes.virtual_fit_routes import virtual_fit_bp
     
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(main_bp, url_prefix='/api')
     app.register_blueprint(scan_bp, url_prefix='/api/scan')
     app.register_blueprint(openvpn_bp, url_prefix='/api/openvpn')
-    app.register_blueprint(virtual_fit_bp, url_prefix='/api/virtual-fit')
+    # app.register_blueprint(virtual_fit_bp, url_prefix='/api/virtual-fit')
+    
+    # 모든 응답에 CORS 헤더 추가하는 after_request 핸들러
+    @app.after_request
+    def add_cors_headers(response):
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
     
     # Request hooks
     @app.before_request
     def before_request():
-        """요청 처리 전 MongoDB 사용 가능 여부를 g 객체에 저장"""
+        """요청 처리 전 MongoDB 사용 가능 여부를 g 객체에 저장하고, 인증 토큰 확인"""
+        # 요청 로깅 (디버깅)
+        logger.info(f"Request: {request.method} {request.path}, {request.headers.get('Origin', 'No Origin')}")
+        
         g.mongodb_available = mongodb_available
+
+        # 인증이 필요하지 않은 경로 목록
+        public_paths = [
+            '/api/',
+            '/api/auth/login',
+            '/api/auth/register',
+            '/api/auth/anonymous',
+            '/api/openvpn/install-guide',
+            '/api/scan/test'  # 테스트 스캔은 인증 없이 사용 가능
+        ]
+
+        # OPTIONS 요청은 항상 허용 (CORS preflight)
+        if request.method == 'OPTIONS':
+            return
+
+        # 공개 경로는 인증 검사 패스
+        if any(request.path.startswith(path) for path in public_paths):
+            return
+
+        # Authorization 헤더에서 토큰 추출
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            # 디버깅을 위해 임시로 인증 검증 건너뛰기 (개발 환경에서만)
+            if os.environ.get('FLASK_ENV') == 'development':
+                logger.warning(f"개발 환경: 인증 없는 요청 허용: {request.path}")
+                return
+                
+            return jsonify({'error': 'Unauthorized', 'message': '인증 토큰이 필요합니다.'}), 403
+
+        token = auth_header.split(' ')[1]
+        payload = verify_token(token)
+        
+        if not payload:
+            return jsonify({'error': 'Unauthorized', 'message': '유효하지 않은 토큰입니다.'}), 403
+            
+        # 인증 정보를 g 객체에 저장
+        g.user = payload
+        
+    # 오류 핸들러 등록
+    @app.errorhandler(404)
+    def not_found(error):
+        return jsonify({'error': 'Not Found', 'message': '요청한 리소스를 찾을 수 없습니다.'}), 404
+        
+    @app.errorhandler(500)
+    def internal_error(error):
+        logger.error(f"서버 내부 오류: {str(error)}")
+        return jsonify({'error': 'Internal Server Error', 'message': '서버 내부 오류가 발생했습니다.'}), 500
+        
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        logger.error(f"처리되지 않은 예외: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Server Error', 'message': f'서버 오류: {str(e)}'}), 500
         
     return app
 

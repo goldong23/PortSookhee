@@ -5,7 +5,9 @@ import logging
 import tempfile
 import shutil
 import uuid
+import hashlib
 from datetime import datetime
+import time as time_module
 from werkzeug.utils import secure_filename
 from bson.objectid import ObjectId
 
@@ -25,6 +27,10 @@ vpn_processes = {}
 
 # 파일 업로드 진행 상태 추적
 upload_status = {}
+
+# 연결 상태 변경 추적을 위한 ETag 저장소
+connection_etags = {}
+connection_last_modified = {}
 
 # 앱 시작 시 openvpns 컬렉션 인덱스 생성 및 VPN 연결 정리
 def setup_openvpn_indexes():
@@ -117,17 +123,107 @@ def get_vpn_status():
             if connection_id in vpn_connections:
                 # process 객체 제외하고 복사 - JSON 직렬화 오류 방지
                 connection_info = {k: v for k, v in vpn_connections[connection_id].items() if k != 'process'}
+                
+                # DB 정보와 통합 (DB 상태가 더 신뢰할 수 있음)
+                connection_info.update({
+                    'id': str(connection_doc['_id']),
+                    'name': connection_doc['filename'],
+                    'status': connection_doc.get('status', 'uploaded'),  # DB 상태 우선
+                    'uploaded_at': connection_doc['created_at'],
+                    'user_id': str(connection_doc['user_id']) if connection_doc.get('user_id') else None,
+                    'description': connection_doc.get('description', '')
+                })
+                
+                # 상태를 명확하게 표시 (프론트엔드 호환성)
+                connection_info['status_text'] = {
+                    'connected': '연결됨',
+                    'connecting': '연결 중...',
+                    'disconnected': '연결 해제됨',
+                    'failed': '연결 실패',
+                    'uploaded': '업로드됨',
+                    'error': '오류 발생'
+                }.get(connection_info['status'], connection_info['status'])
             else:
                 connection_info = {
                     'id': str(connection_doc['_id']),
                     'name': connection_doc['filename'],
                     'status': connection_doc.get('status', 'uploaded'),
+                    'status_text': {
+                        'connected': '연결됨',
+                        'connecting': '연결 중...',
+                        'disconnected': '연결 해제됨',
+                        'failed': '연결 실패',
+                        'uploaded': '업로드됨',
+                        'error': '오류 발생'
+                    }.get(connection_doc.get('status', 'uploaded'), connection_doc.get('status', 'uploaded')),
                     'uploaded_at': connection_doc['created_at'],
                     'user_id': str(connection_doc['user_id']) if connection_doc.get('user_id') else None,
                     'description': connection_doc.get('description', '')
                 }
                 
-            return jsonify(connection_info)
+            # ETag 및 상태 변경 감지
+            
+            # 상태 정보 해시 생성
+            status_hash = hashlib.md5(
+                f"{connection_info.get('status')}:{connection_info.get('connected_at', '')}:{connection_info.get('disconnected_at', '')}".encode()
+            ).hexdigest()
+            
+            # 클라이언트 ETag 확인
+            client_etag = request.headers.get('If-None-Match')
+            last_etag = connection_etags.get(connection_id)
+            
+            # 상태 변경 감지
+            status_changed = (last_etag != status_hash)
+            
+            # ETag 저장
+            connection_etags[connection_id] = status_hash
+            
+            # 상태 시간 업데이트
+            if connection_info.get('status') == 'disconnected' and connection_info.get('disconnected_at'):
+                connection_last_modified[connection_id] = connection_info.get('disconnected_at')
+            elif connection_info.get('status') == 'connected' and connection_info.get('connected_at'):
+                connection_last_modified[connection_id] = connection_info.get('connected_at')
+            
+            # 상태에 따른 폴링 간격 추천
+            if connection_info.get('status') == 'connected':
+                poll_interval = 5000  # 연결됨: 5초
+            elif connection_info.get('status') in ['disconnected', 'failed', 'error']:
+                poll_interval = 30000  # 최종 상태: 30초
+            else:
+                poll_interval = 1000  # 연결 중: 1초
+                
+            # 폴링 간격 정보 추가
+            connection_info['recommended_poll_interval'] = poll_interval
+            
+            # 응답 준비
+            response = jsonify(connection_info)
+            response.headers['ETag'] = f'"{status_hash}"'
+            
+            # ETag가 일치하면 304 응답 (Not Modified) - 모든 상태에 대해 적용
+            if client_etag and client_etag == f'"{status_hash}"':
+                # 디버깅 로그 없이 304 응답
+                return '', 304
+            
+            # 상태에 따른 캐싱 전략 적용
+            if connection_info.get('status') == 'connected':
+                # 연결된 상태는 짧은 시간(5초) 캐싱 허용 - 폴링 부담 줄이기
+                response.headers['Cache-Control'] = 'max-age=5, public'
+                if connection_info.get('connected_at'):
+                    response.headers['Last-Modified'] = connection_info['connected_at']
+                
+            elif connection_info.get('status') in ['disconnected', 'failed', 'error']:
+                # 최종 상태는 더 긴 시간(30초) 캐싱 허용
+                response.headers['Cache-Control'] = 'max-age=30, public'
+                if connection_info.get('disconnected_at'):
+                    response.headers['Last-Modified'] = connection_info['disconnected_at']
+                    
+            else:
+                # 연결 중인 상태는 캐싱 없음 (실시간 업데이트)
+                response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+                response.headers['Pragma'] = 'no-cache'
+                response.headers['Expires'] = '0'
+                
+            return response
         
         # 사용자 ID로 필터링
         if user_id:
@@ -203,20 +299,32 @@ def get_vpn_status():
 @openvpn_bp.route('/upload', methods=['POST'])
 def upload_config():
     """OpenVPN 설정 파일을 업로드합니다."""
+    print("디버깅: upload_config 함수 호출됨")
+    logger.info("디버깅: upload_config 함수 호출됨 (로거)")
+    
     if 'file' not in request.files:
+        print("디버깅: 'file'이 request.files에 없음")
+        logger.error("디버깅: 'file'이 request.files에 없음 (로거)")
         return jsonify({
             'error': 'Bad Request',
             'message': 'OpenVPN 설정 파일이 제공되지 않았습니다.'
         }), 400
         
     file = request.files['file']
+    print(f"디버깅: 파일 이름: {file.filename}")
+    logger.info(f"디버깅: 파일 이름: {file.filename} (로거)")
+    
     if file.filename == '':
+        print("디버깅: 파일 이름이 비어 있음")
+        logger.error("디버깅: 파일 이름이 비어 있음 (로거)")
         return jsonify({
             'error': 'Bad Request',
             'message': '파일이 선택되지 않았습니다.'
         }), 400
         
     if not file.filename.endswith('.ovpn'):
+        print(f"디버깅: 파일 확장자가 .ovpn이 아님: {file.filename}")
+        logger.error(f"디버깅: 파일 확장자가 .ovpn이 아님: {file.filename} (로거)")
         return jsonify({
             'error': 'Bad Request',
             'message': '.ovpn 파일만 업로드할 수 있습니다.'
@@ -225,6 +333,9 @@ def upload_config():
     # 사용자 ID와 설명 가져오기
     user_id = request.form.get('user_id')
     description = request.form.get('description', '')
+    
+    print(f"디버깅: user_id: {user_id}, description: {description}")
+    logger.info(f"디버깅: user_id: {user_id}, description: {description} (로거)")
     
     try:
         # 디렉토리 접근 가능한지 확인
@@ -453,21 +564,62 @@ def delete_connection(connection_id):
             'message': f'OpenVPN 설정 파일 삭제에 실패했습니다: {str(e)}'
         }), 500
 
+# OpenVPN 설정 파일 검증 함수 개선
+def validate_ovpn_file(file_path):
+    """OpenVPN 설정 파일의 유효성을 검사합니다."""
+    try:
+        # 파일 존재 확인
+        if not os.path.exists(file_path):
+            print(f"디버깅: 파일이 존재하지 않음: {file_path}")
+            return False, "설정 파일이 존재하지 않습니다."
+
+        # 파일 내용 확인
+        try:
+            with open(file_path, 'rb') as f:
+                binary_content = f.read()
+                
+            # 기본 검증
+            if b'remote ' not in binary_content:
+                return False, "VPN 서버 정보(remote)가 누락되었습니다."
+                
+            # ovpn 파일 백업
+            backup_path = f"{file_path}.bak"
+            with open(backup_path, 'wb') as f:
+                f.write(binary_content)
+                
+            print(f"디버깅: 원본 파일 백업 완료: {backup_path}")
+            
+            # 파일 내용만 간단히 확인하고 원본 그대로 사용
+            return True, "OpenVPN 설정 파일이 검증되었습니다."
+            
+        except Exception as file_err:
+            print(f"디버깅: 파일 처리 오류: {str(file_err)}")
+            return False, f"설정 파일 처리 오류: {str(file_err)}"
+            
+    except Exception as e:
+        print(f"디버깅: 파일 검증 중 예외 발생: {str(e)}")
+        return False, f"파일 검증 중 오류 발생: {str(e)}"
+
 @openvpn_bp.route('/connect', methods=['POST'])
 def connect_vpn():
     """업로드된 OpenVPN 설정 파일로 연결을 시작합니다."""
+    print("디버깅: connect_vpn 함수 호출됨")
+    logger.info("디버깅: connect_vpn 함수 호출됨")
+    
     data = request.get_json()
     
     if not data or 'connection_id' not in data:
+        print("디버깅: 연결 ID가 요청에 없음")
         return jsonify({
             'error': 'Bad Request',
             'message': '연결 ID가 필요합니다.'
         }), 400
         
     connection_id = data['connection_id']
+    print(f"디버깅: 연결 ID: {connection_id}")
     
     try:
-        # MongoDB에서 설정 가져오기 - 수정된 방식
+        # MongoDB 접근
         if 'MONGO_DB' in current_app.config:
             mongo_db = current_app.config['MONGO_DB']
         elif 'MONGO' in current_app.config:
@@ -480,12 +632,13 @@ def connect_vpn():
         connection_doc = mongo_db.openvpns.find_one({"_id": ObjectId(connection_id)})
         
         if not connection_doc:
+            print(f"디버깅: 연결 ID {connection_id}에 해당하는 VPN 설정을 찾을 수 없음")
             return jsonify({
                 'error': 'Not Found',
                 'message': '해당 ID의 VPN 설정을 찾을 수 없습니다.'
             }), 404
-            
-        # 메모리에 설정 정보 없으면 생성
+        
+        # 메모리 상태 업데이트
         if connection_id not in vpn_connections:
             vpn_connections[connection_id] = {
                 'id': connection_id,
@@ -497,74 +650,428 @@ def connect_vpn():
                 'description': connection_doc.get('description', ''),
                 'last_error': None
             }
-            
+        
         connection = vpn_connections[connection_id]
         config_path = connection_doc['config_path']
         
-        # 사용자 자격 증명이 필요한 경우
-        auth_file = None
-        if 'username' in data and 'password' in data:
+        print(f"디버깅: VPN 설정 파일 경로: {config_path}")
+        
+        # 실행 중인 프로세스가 있으면 종료
+        if connection_id in vpn_processes and vpn_processes[connection_id] and vpn_processes[connection_id].poll() is None:
+            print(f"디버깅: 실행 중인 프로세스 종료 (PID: {vpn_processes[connection_id].pid})")
             try:
-                # 임시 인증 파일 생성
-                auth_file = os.path.join(OPENVPN_CONFIG_DIR, f"{connection_id}_auth.txt")
-                with open(auth_file, 'w') as f:
-                    f.write(f"{data['username']}\n{data['password']}")
-            except Exception as e:
-                logger.error(f"인증 파일 생성 오류: {str(e)}", exc_info=True)
-                return jsonify({
-                    'error': 'Internal Server Error',
-                    'message': f'인증 파일 생성에 실패했습니다: {str(e)}'
-                }), 500
-        
-        # 이미 실행 중인 프로세스가 있다면 종료
-        if connection_id in vpn_processes and vpn_processes[connection_id].poll() is None:
-            vpn_processes[connection_id].terminate()
+                vpn_processes[connection_id].terminate()
+                time_module.sleep(1)
+            except:
+                pass
                 
-        # OpenVPN 명령 구성
-        cmd = ['sudo', 'openvpn', '--config', config_path, '--daemon']
+        # 기존 프로세스 정리
+        try:
+            subprocess.run(['pkill', '-f', f'openvpn.*{connection_id}'], capture_output=True, text=True)
+        except:
+            pass
         
-        if auth_file:
-            cmd.extend(['--auth-user-pass', auth_file])
+        # 설정 파일 검증
+        is_valid, validation_msg = validate_ovpn_file(config_path)
+        if not is_valid:
+            print(f"디버깅: 설정 파일 검증 실패: {validation_msg}")
+            
+            # 상태 업데이트
+            connection['status'] = 'failed'
+            connection['last_error'] = validation_msg
+            
+            # MongoDB 상태 업데이트
+            mongo_db.openvpns.update_one(
+                {"_id": ObjectId(connection_id)},
+                {"$set": {
+                    "status": "failed",
+                    "last_error": validation_msg,
+                    "updated_at": datetime.now().isoformat()
+                }}
+            )
+            
+            return jsonify({
+                'error': 'Invalid Configuration',
+                'message': validation_msg,
+                'status': 'failed'
+            }), 400
+            
+        print(f"디버깅: 설정 파일 검증 성공: {validation_msg}")
+        
+        # OpenVPN 위치 확인
+        try:
+            openvpn_path = subprocess.check_output(['which', 'openvpn'], text=True).strip()
+        except:
+            openvpn_path = '/opt/homebrew/sbin/openvpn'
+            
+        if not os.path.exists(openvpn_path):
+            return jsonify({
+                'error': 'Configuration Error',
+                'message': f'OpenVPN 실행 파일을 찾을 수 없습니다: {openvpn_path}',
+                'status': 'failed'
+            }), 500
+            
+        # 로그 파일 경로
+        logs_dir = os.path.join(OPENVPN_CONFIG_DIR, "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        log_file_path = os.path.join(logs_dir, f"openvpn_{connection_id}.log")
+        
+        # 직접 원본 파일을 사용하는 단순화된 명령
+        # 참고: sudo python run.py로 Flask 서버를 실행해야 합니다!
+        cmd = [
+            openvpn_path,
+            '--config', config_path,  # 원본 설정 파일 사용
+            '--log', log_file_path
+        ]
+        
+        print(f"디버깅: 원본 설정 파일 사용: {config_path}")
+            
+        print(f"디버깅: OpenVPN 명령: {' '.join(cmd)}")
         
         # OpenVPN 프로세스 시작
-        process = subprocess.Popen(cmd, 
-                                  stdout=subprocess.PIPE, 
-                                  stderr=subprocess.PIPE)
+        try:
+            # 프로세스를 분리된 모드로 실행
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # 현재 시간
+            now = datetime.now()
+            
+            # 상태 업데이트
+            connection['status'] = 'connecting'
+            connection['started_at'] = now.isoformat()
+            connection['log_file'] = log_file_path  # 작업 디렉토리 대신 로그 파일 경로 저장
+            vpn_processes[connection_id] = process
+            
+            print(f"디버깅: OpenVPN 프로세스 시작 (PID: {process.pid})")
+            
+            # MongoDB 상태 업데이트
+            mongo_db.openvpns.update_one(
+                {"_id": ObjectId(connection_id)},
+                {"$set": {
+                    "status": "connecting",
+                    "updated_at": now.isoformat()
+                }}
+            )
+            
+            # 비동기 모니터링 스레드
+            def monitor_process():
+                try:
+                    # 2초 대기 후 프로세스 상태 확인
+                    time_module.sleep(2)
+                    
+                    # 프로세스가 아직 실행 중인지 확인
+                    if process.poll() is None:
+                        # 현재 시간
+                        now = datetime.now().isoformat()
+                        
+                        # 아직 실행 중이면 연결 성공으로 간주
+                        connection['status'] = 'connected'
+                        connection['connected_at'] = now
+                        
+                        # ETag 갱신 (상태 변경)
+                        connection_etags[connection_id] = hashlib.md5(
+                            f"connected:{now}:".encode()
+                        ).hexdigest()
+                        connection_last_modified[connection_id] = now
+                        
+                        # MongoDB 상태 업데이트
+                        update_result = mongo_db.openvpns.update_one(
+                            {"_id": ObjectId(connection_id)},
+                            {"$set": {
+                                "status": "connected",
+                                "connected_at": now,
+                                "updated_at": now,
+                                "connection_count": connection_doc.get('connection_count', 0) + 1
+                            }}
+                        )
+                        
+                        print(f"디버깅: OpenVPN 연결 성공 (DB 업데이트: {update_result.modified_count})")
+                        logger.info(f"OpenVPN 연결 성공 (ID: {connection_id})")
+                        
+                        # 메모리 상태 로깅 - 디버깅 확인용
+                        print(f"디버깅: 현재 메모리 연결 상태: {connection}")
+                        
+                        # 업데이트 후 DB에서 다시 읽어서 확인
+                        updated_doc = mongo_db.openvpns.find_one({"_id": ObjectId(connection_id)})
+                        if updated_doc:
+                            print(f"디버깅: DB 저장 후 상태: {updated_doc.get('status')}")
+                        else:
+                            print("디버깅: DB에서 업데이트된 문서를 찾을 수 없음")
+                    else:
+                        # 프로세스가 종료됨 - 오류
+                        return_code = process.returncode
+                        
+                        # 로그 파일 확인
+                        error_msg = "알 수 없는 오류"
+                        try:
+                            # 로그 파일 확인
+                            if os.path.exists(log_file_path):
+                                with open(log_file_path, 'r') as f:
+                                    log_content = f.read()
+                                    if log_content:
+                                        # 전체 로그 출력 (디버깅용)
+                                        print(f"디버깅: OpenVPN 로그 내용:\n{log_content}")
+                                        logger.error(f"OpenVPN 오류 로그:\n{log_content}")
+                                        
+                                        # 오류 메시지 추출 (마지막 500자 또는 오류 포함 라인)
+                                        if "error" in log_content.lower():
+                                            # 오류 관련 라인 찾기
+                                            error_lines = [line for line in log_content.splitlines() 
+                                                         if "error" in line.lower() or 
+                                                            "warning" in line.lower() or 
+                                                            "critical" in line.lower() or
+                                                            "fatal" in line.lower()]
+                                            if error_lines:
+                                                error_msg = "\n".join(error_lines[-3:])  # 마지막 3개 오류 메시지
+                                            else:
+                                                error_msg = log_content[-500:] if len(log_content) > 500 else log_content
+                                        else:
+                                            error_msg = log_content[-500:] if len(log_content) > 500 else log_content
+                            
+                            # stdout/stderr 확인
+                            stdout_data, stderr_data = process.communicate(timeout=0.1)
+                            if stdout_data:
+                                print(f"디버깅: OpenVPN stdout: {stdout_data}")
+                                logger.info(f"OpenVPN stdout: {stdout_data}")
+                            if stderr_data:
+                                print(f"디버깅: OpenVPN stderr: {stderr_data}")
+                                logger.error(f"OpenVPN stderr: {stderr_data}")
+                                if not error_msg or error_msg == "알 수 없는 오류":
+                                    error_msg = stderr_data
+                        except Exception as log_err:
+                            print(f"디버깅: 로그 파일 읽기 오류: {str(log_err)}")
+                            logger.error(f"로그 파일 읽기 오류: {str(log_err)}")
+                            
+                        # 상태 업데이트
+                        connection['status'] = 'failed'
+                        connection['last_error'] = error_msg
+                        
+                        # 실패 시 ETag 갱신
+                        now = datetime.now().isoformat()
+                        connection_etags[connection_id] = hashlib.md5(
+                            f"failed::{now}".encode()
+                        ).hexdigest()
+                        connection_last_modified[connection_id] = now
+                        
+                        # MongoDB 상태 업데이트
+                        mongo_db.openvpns.update_one(
+                            {"_id": ObjectId(connection_id)},
+                            {"$set": {
+                                "status": "failed",
+                                "last_error": error_msg,
+                                "updated_at": datetime.now().isoformat()
+                            }}
+                        )
+                        
+                        print(f"디버깅: OpenVPN 연결 실패 (오류 코드: {return_code})")
+                        logger.error(f"OpenVPN 연결 실패 (ID: {connection_id}): {error_msg}")
+                        
+                        # 실패한 로그는 보존
+                except Exception as e:
+                    print(f"디버깅: 모니터링 오류: {str(e)}")
+                    
+            # 모니터링 스레드 시작
+            import threading
+            monitor_thread = threading.Thread(target=monitor_process)
+            monitor_thread.daemon = True
+            monitor_thread.start()
+            
+            # 연결 시작 응답
+            return jsonify({
+                'message': 'OpenVPN 연결이 시작되었습니다.',
+                'connection_id': connection_id,
+                'status': 'connecting'
+            })
+            
+        except Exception as e:
+            error_msg = f"OpenVPN 프로세스 시작 실패: {str(e)}"
+            print(f"디버깅: {error_msg}")
+            
+            # 상태 업데이트
+            connection['status'] = 'failed'
+            connection['last_error'] = error_msg
+            
+            # 로그 파일은 보존
+                
+            # MongoDB 상태 업데이트
+            mongo_db.openvpns.update_one(
+                {"_id": ObjectId(connection_id)},
+                {"$set": {
+                    "status": "failed",
+                    "last_error": error_msg,
+                    "updated_at": datetime.now().isoformat()
+                }}
+            )
+            
+            return jsonify({
+                'error': 'Process Error',
+                'message': error_msg,
+                'status': 'failed'
+            }), 500
+            
+    except Exception as e:
+        error_msg = f"OpenVPN 연결 중 오류: {str(e)}"
+        print(f"디버깅: {error_msg}")
+        logger.error(error_msg, exc_info=True)
+        
+        return jsonify({
+            'error': 'Server Error',
+            'message': error_msg,
+            'status': 'error'
+        }), 500
+
+@openvpn_bp.route('/disconnect', methods=['POST'])
+def disconnect_vpn():
+    """OpenVPN 연결을 종료합니다."""
+    print("디버깅: disconnect_vpn 함수 호출됨")
+    logger.info("디버깅: disconnect_vpn 함수 호출됨")
+    
+    data = request.get_json()
+    print(f"디버깅: 요청 데이터: {data}")
+    
+    if not data or 'connection_id' not in data:
+        print("디버깅: connection_id가 요청에 없음")
+        return jsonify({
+            'error': 'Bad Request',
+            'message': '연결 ID가 필요합니다.'
+        }), 400
+        
+    connection_id = data['connection_id']
+    print(f"디버깅: 연결 ID: {connection_id}")
+    
+    try:
+        # MongoDB에서 설정 가져오기 - 수정된 방식
+        if 'MONGO_DB' in current_app.config:
+            mongo_db = current_app.config['MONGO_DB']
+            print("디버깅: MONGO_DB 사용")
+        elif 'MONGO' in current_app.config:
+            mongo_db = current_app.config['MONGO'].db
+            print("디버깅: MONGO.db 사용")
+        else:
+            print("디버깅: PyMongo 다시 초기화")
+            from flask_pymongo import PyMongo
+            mongo = PyMongo(current_app)
+            mongo_db = mongo.db
+            
+        print(f"디버깅: MongoDB 접근 성공")
+        
+        # 데이터베이스에서 설정 찾기
+        connection_doc = mongo_db.openvpns.find_one({"_id": ObjectId(connection_id)})
+        
+        if not connection_doc:
+            print(f"디버깅: 연결 ID {connection_id}에 해당하는 문서를 DB에서 찾을 수 없음")
+            return jsonify({
+                'error': 'Not Found',
+                'message': '해당 ID의 VPN 설정을 찾을 수 없습니다.'
+            }), 404
+            
+        # 수정된 부분: 메모리에 없더라도 계속 진행
+        # 메모리에 설정 정보가 없으면 생성해서 진행
+        if connection_id not in vpn_connections:
+            print(f"디버깅: 연결 ID {connection_id}가 메모리에 없음, 새로 생성")
+            vpn_connections[connection_id] = {
+                'id': connection_id,
+                'name': connection_doc['filename'],
+                'status': connection_doc.get('status', 'disconnected'),  # 기본값을 disconnected로 설정
+                'uploaded_at': connection_doc.get('created_at'),
+                'config_path': connection_doc.get('config_path'),
+                'user_id': str(connection_doc['user_id']) if connection_doc.get('user_id') else None,
+                'description': connection_doc.get('description', ''),
+                'last_error': None
+            }
+        
+        connection = vpn_connections[connection_id]
+        print(f"디버깅: 현재 연결 상태: {connection.get('status', 'unknown')}")
+        
+        # 이미 연결 해제된 상태라면 바로 성공 응답
+        if connection.get('status') == 'disconnected':
+            print(f"디버깅: 이미 연결 해제된 상태")
+            return jsonify({
+                'message': 'OpenVPN 연결이 이미 종료되었습니다.',
+                'connection_id': connection_id,
+                'status': 'disconnected'
+            })
+        
+        # OpenVPN 프로세스 종료
+        process_terminated = False
+        if connection_id in vpn_processes and vpn_processes[connection_id] is not None:
+            print(f"디버깅: 프로세스 종료 시도")
+            try:
+                # 먼저 정상 종료 시도
+                vpn_processes[connection_id].terminate()
+                
+                # 5초 대기 후 여전히 실행 중이면 강제 종료
+                try:
+                    vpn_processes[connection_id].wait(timeout=5)
+                    process_terminated = True
+                    print(f"디버깅: 프로세스 정상 종료됨")
+                except subprocess.TimeoutExpired:
+                    vpn_processes[connection_id].kill()
+                    process_terminated = True
+                    print(f"디버깅: 프로세스 강제 종료됨")
+                    
+                # 종료 후 프로세스 객체 삭제
+                del vpn_processes[connection_id]
+            except Exception as e:
+                print(f"디버깅: 프로세스 종료 오류: {str(e)}")
+                logger.error(f"프로세스 종료 오류: {str(e)}")
+        else:
+            print(f"디버깅: 실행 중인 프로세스가 없음")
+        
+        # PKill로 OpenVPN 프로세스 정리 (백업)
+        try:
+            print(f"디버깅: pkill 명령으로 프로세스 정리")
+            # Flask 서버가 sudo로 실행 중이어야 합니다
+            subprocess.run(['pkill', '-f', f'openvpn.*{connection_id}'], capture_output=True, text=True)
+            print(f"디버깅: pkill 명령 완료")
+        except Exception as pkill_err:
+            print(f"디버깅: pkill 명령 오류: {str(pkill_err)}")
         
         # 현재 시간
         now = datetime.now()
         
-        # 상태 업데이트 - process 객체는 별도 저장
-        connection['status'] = 'connecting'
-        connection['started_at'] = now.isoformat()
-        # process 객체는 별도 딕셔너리에 저장
-        vpn_processes[connection_id] = process
+        # 메모리 상태 업데이트
+        connection['status'] = 'disconnected'
+        connection['disconnected_at'] = now.isoformat()
+        
+        # ETag 갱신 (상태 변경)
+        connection_etags[connection_id] = hashlib.md5(
+            f"disconnected::{now.isoformat()}".encode()
+        ).hexdigest()
+        connection_last_modified[connection_id] = now.isoformat()
         
         # MongoDB 상태 업데이트
-        mongo_db.openvpns.update_one(
+        print(f"디버깅: MongoDB 상태 업데이트 시도")
+        update_result = mongo_db.openvpns.update_one(
             {"_id": ObjectId(connection_id)},
             {"$set": {
-                "status": "connecting",
-                "last_connected": now.isoformat(),
-                "updated_at": now.isoformat(),
-                "connection_count": connection_doc.get("connection_count", 0) + 1
+                "status": "disconnected",
+                "last_disconnected": now.isoformat(),
+                "updated_at": now.isoformat()
             }}
         )
+        print(f"디버깅: MongoDB 업데이트 결과: {update_result.modified_count} 문서 수정됨")
         
-        logger.info(f"OpenVPN 연결 시작 (ID: {connection_id})")
+        logger.info(f"OpenVPN 연결 종료 (ID: {connection_id})")
         
         return jsonify({
-            'message': 'OpenVPN 연결이 시작되었습니다.',
+            'message': 'OpenVPN 연결이 종료되었습니다.',
             'connection_id': connection_id,
-            'status': 'connecting'
+            'status': 'disconnected'
         })
         
     except Exception as e:
-        logger.error(f"OpenVPN 연결 오류: {str(e)}", exc_info=True)
+        print(f"디버깅: 연결 종료 처리 중 예외 발생: {str(e)}")
+        logger.error(f"OpenVPN 연결 종료 중 오류: {str(e)}", exc_info=True)
         
         # 메모리 상태 업데이트
         if connection_id in vpn_connections:
-            vpn_connections[connection_id]['status'] = 'failed'
+            vpn_connections[connection_id]['status'] = 'error'
             vpn_connections[connection_id]['last_error'] = str(e)
         
         # MongoDB 상태 업데이트
@@ -577,121 +1084,8 @@ def connect_vpn():
                     "last_error": str(e)
                 }}
             )
-        except:
-            pass
-        
-        return jsonify({
-            'error': 'Internal Server Error',
-            'message': f'OpenVPN 연결에 실패했습니다: {str(e)}'
-        }), 500
-        
-    finally:
-        # 인증 파일 삭제 (보안)
-        if auth_file and os.path.exists(auth_file):
-            os.remove(auth_file)
-
-@openvpn_bp.route('/disconnect', methods=['POST'])
-def disconnect_vpn():
-    """OpenVPN 연결을 종료합니다."""
-    data = request.get_json()
-    
-    if not data or 'connection_id' not in data:
-        return jsonify({
-            'error': 'Bad Request',
-            'message': '연결 ID가 필요합니다.'
-        }), 400
-        
-    connection_id = data['connection_id']
-    
-    try:
-        # MongoDB에서 설정 가져오기 - 수정된 방식
-        if 'MONGO_DB' in current_app.config:
-            mongo_db = current_app.config['MONGO_DB']
-        elif 'MONGO' in current_app.config:
-            mongo_db = current_app.config['MONGO'].db
-        else:
-            from flask_pymongo import PyMongo
-            mongo = PyMongo(current_app)
-            mongo_db = mongo.db
-        
-        connection_doc = mongo_db.openvpns.find_one({"_id": ObjectId(connection_id)})
-        
-        if not connection_doc:
-            return jsonify({
-                'error': 'Not Found',
-                'message': '해당 ID의 VPN 설정을 찾을 수 없습니다.'
-            }), 404
-            
-        # 메모리에 설정 정보 없으면 생성
-        if connection_id not in vpn_connections:
-            return jsonify({
-                'error': 'Not Found',
-                'message': '해당 ID의 실행 중인 VPN 연결을 찾을 수 없습니다.'
-            }), 404
-            
-        connection = vpn_connections[connection_id]
-        
-        # OpenVPN 프로세스 종료
-        if connection_id in vpn_processes and vpn_processes[connection_id] is not None:
-            # 먼저 정상 종료 시도
-            vpn_processes[connection_id].terminate()
-            
-            # 5초 대기 후 여전히 실행 중이면 강제 종료
-            try:
-                vpn_processes[connection_id].wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                vpn_processes[connection_id].kill()
-                
-            # 종료 후 프로세스 객체 삭제
-            del vpn_processes[connection_id]
-        
-        # PKill로 OpenVPN 프로세스 정리 (백업 종료 방법)
-        subprocess.run(['sudo', 'pkill', '-f', f'openvpn.*{connection_id}'])
-        
-        # 현재 시간
-        now = datetime.now()
-        
-        # 메모리 상태 업데이트
-        connection['status'] = 'disconnected'
-        connection['disconnected_at'] = now.isoformat()
-        
-        # MongoDB 상태 업데이트
-        mongo_db.openvpns.update_one(
-            {"_id": ObjectId(connection_id)},
-            {"$set": {
-                "status": "disconnected",
-                "last_disconnected": now.isoformat(),
-                "updated_at": now.isoformat()
-            }}
-        )
-        
-        logger.info(f"OpenVPN 연결 종료 (ID: {connection_id})")
-        
-        return jsonify({
-            'message': 'OpenVPN 연결이 종료되었습니다.',
-            'connection_id': connection_id,
-            'status': 'disconnected'
-        })
-        
-    except Exception as e:
-        logger.error(f"OpenVPN 연결 종료 오류: {str(e)}", exc_info=True)
-        
-        # 메모리 상태 업데이트
-        if connection_id in vpn_connections:
-            vpn_connections[connection_id]['status'] = 'error'
-            vpn_connections[connection_id]['last_error'] = str(e)
-        
-        # MongoDB 상태 업데이트
-        try:
-            mongo_db.openvpns.update_one(
-                {"_id": ObjectId(connection_id)},
-                {"$set": {
-                    "status": "error",
-                    "updated_at": datetime.now().isoformat(),
-                    "last_error": str(e)
-                }}
-            )
-        except:
+        except Exception as db_err:
+            print(f"디버깅: MongoDB 업데이트 오류: {str(db_err)}")
             pass
         
         return jsonify({

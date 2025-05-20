@@ -5,7 +5,139 @@ import axios from 'axios';
 import './ScanForm.css';
 
 // API 기본 URL
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = '/api';  // 상대 경로 사용
+
+// 서버 상태 확인 URL
+const SERVER_HEALTH_URL = `${API_BASE_URL}/`;
+
+// axios 인스턴스 생성 (기본 설정)
+const axiosInstance = axios.create({
+  timeout: 30000, // 30초 타임아웃으로 증가
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  }
+});
+
+// 요청 인터셉터 설정
+axiosInstance.interceptors.request.use(
+  config => {
+    console.log(`요청 시작: ${config.method?.toUpperCase()} ${config.url}`);
+    return config;
+  },
+  error => {
+    console.error('요청 인터셉터 오류:', error);
+    return Promise.reject(error);
+  }
+);
+
+// 응답 인터셉터 설정
+axiosInstance.interceptors.response.use(
+  response => {
+    console.log(`응답 성공: ${response.status} ${response.config.url}`);
+    console.log('응답 데이터:', response.data); // 응답 데이터 로깅 추가
+    return response;
+  },
+  error => {
+    console.error('응답 오류:', error);
+    // 오류 세부 정보 로깅
+    if (error.response) {
+      // 서버가 응답을 반환했지만 2xx 범위를 벗어난 상태 코드
+      console.error('응답 데이터:', error.response.data);
+      console.error('응답 상태:', error.response.status);
+      console.error('응답 헤더:', error.response.headers);
+    } else if (error.request) {
+      // 요청은 보냈지만 응답을 받지 못함
+      console.error('응답 없음:', error.request);
+    } else {
+      // 요청 설정 중 오류 발생
+      console.error('요청 오류:', error.message);
+    }
+    return Promise.reject(error);
+  }
+);
+
+// 서버 상태 확인 함수
+const checkServerStatus = async (): Promise<boolean> => {
+  try {
+    console.log('서버 상태 확인 중...');
+    // 일반 GET 요청으로 변경
+    const response = await axios.get(SERVER_HEALTH_URL, {
+      timeout: 10000, // 10초 타임아웃
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+    
+    console.log('서버 상태 응답:', {
+      status: response.status,
+      data: response.data
+    });
+    
+    return response.status === 200;
+  } catch (error: any) {
+    console.error('서버 연결 확인 실패:', error);
+    
+    // Axios 오류 세부 정보 로깅
+    if (error.response) {
+      // 서버가 응답을 반환했지만 2xx 범위를 벗어난 상태 코드
+      console.error('서버 응답 오류:', {
+        status: error.response.status,
+        data: error.response.data
+      });
+    } else if (error.request) {
+      // 요청은 보냈지만 응답을 받지 못함
+      console.error('서버 응답 없음 (CORS 또는 서버 다운)');
+    } else {
+      // 요청 설정 중 오류 발생
+      console.error('요청 설정 오류:', error.message);
+    }
+    
+    // 타임아웃 오류 확인
+    if (error.code === 'ECONNABORTED') {
+      console.error('서버 연결 타임아웃 발생');
+    }
+    
+    return false;
+  }
+};
+
+// 재시도 로직이 포함된 API 호출 함수
+const callApiWithRetry = async (
+  method: 'get' | 'post',
+  url: string,
+  data?: any,
+  maxRetries: number = 2
+): Promise<any> => {
+  let retries = 0;
+  
+  while (retries <= maxRetries) {
+    try {
+      if (method === 'get') {
+        return await axiosInstance.get(url);
+      } else {
+        return await axiosInstance.post(url, data);
+      }
+    } catch (error) {
+      console.error(`API 호출 실패 (시도 ${retries + 1}/${maxRetries + 1}):`, error);
+      
+      // 마지막 시도에서 실패하면 오류 전파
+      if (retries === maxRetries) {
+        throw error;
+      }
+      
+      // 재시도 전 잠시 대기 (지수 백오프: 1초, 2초, 4초, ...)
+      const delay = Math.pow(2, retries) * 1000;
+      console.log(`${delay}ms 후 재시도...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      
+      retries++;
+    }
+  }
+  
+  // 여기까지 오면 모든 재시도가 실패한 것
+  throw new Error('최대 재시도 횟수 초과');
+};
 
 interface ScanFormProps {
   onScanComplete?: (results: any) => void;
@@ -15,7 +147,7 @@ interface ScanFormProps {
 
 interface ScanData {
   target: string;
-  mode: 'quick' | 'full' | 'custom';
+  mode: 'quick' | 'full' | 'custom' | 'test';
   ports?: string;
   arguments?: string;
 }
@@ -47,13 +179,14 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
   });
   
   const [target, setTarget] = useState('');
-  const [scanType, setScanType] = useState<'quick' | 'full' | 'custom'>('quick');
+  const [scanType, setScanType] = useState<'quick' | 'full' | 'custom' | 'test'>('test');
   const [ports, setPorts] = useState('');
   const [customArguments, setCustomArguments] = useState('');
   const [options, setOptions] = useState({
     osDetection: false,
     serviceVersion: false,
     scriptScan: false,
+    useTestMode: true,
   });
   
   const [error, setError] = useState('');
@@ -61,6 +194,7 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
   const [scanId, setScanId] = useState<string | null>(null);
   const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
   const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
+  const [serverAvailable, setServerAvailable] = useState<boolean>(true);
 
   // 스캔 옵션 변경 핸들러
   const handleOptionChange = (option: keyof typeof options) => {
@@ -90,6 +224,30 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
     };
   }, [pollingInterval]);
 
+  // 컴포넌트 마운트 시 서버 상태 확인
+  useEffect(() => {
+    const checkServer = async () => {
+      const isAvailable = await checkServerStatus();
+      setServerAvailable(isAvailable);
+      
+      if (!isAvailable) {
+        setError('백엔드 서버에 연결할 수 없습니다. 서버 상태를 확인해주세요.');
+      }
+    };
+    
+    checkServer();
+    
+    // 30초마다 서버 상태 확인 (폴링)
+    const serverCheckInterval = setInterval(checkServer, 30000);
+    
+    return () => {
+      clearInterval(serverCheckInterval);
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+    };
+  }, []);
+
   // 스캔 시작 핸들러
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,6 +260,17 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
       return;
     }
 
+    // 서버 상태 확인
+    if (!serverAvailable) {
+      const isAvailable = await checkServerStatus();
+      setServerAvailable(isAvailable);
+      
+      if (!isAvailable) {
+        setError('백엔드 서버에 연결할 수 없습니다. 서버 상태를 확인해주세요.');
+        return;
+      }
+    }
+
     // 사용자 정의 스캔 시 포트 또는 인자 필요
     if (scanType === 'custom' && !ports && !customArguments) {
       setError('사용자 정의 스캔에는 포트 범위 또는 스캔 인자를 지정해야 합니다.');
@@ -109,18 +278,28 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
     }
 
     // API 요청 데이터 구성
-    const scanData: ScanData = {
-      target,
-      mode: scanType,
-    };
-
-    // 사용자 정의 스캔 파라미터
-    if (scanType === 'custom') {
-      if (ports) {
-        scanData.ports = ports;
-      }
-      if (customArguments || Object.values(options).some(val => val)) {
-        scanData.arguments = customArguments || buildScanArguments();
+    let scanData: ScanData;
+    
+    // 테스트 모드 사용 여부에 따라 mode 설정
+    if (options.useTestMode) {
+      scanData = {
+        target,
+        mode: 'test', // 항상 테스트 모드 사용
+      };
+    } else {
+      scanData = {
+        target,
+        mode: scanType,
+      };
+      
+      // 사용자 정의 스캔 파라미터
+      if (scanType === 'custom') {
+        if (ports) {
+          scanData.ports = ports;
+        }
+        if (customArguments || Object.values({...options, useTestMode: false}).some(val => val)) {
+          scanData.arguments = customArguments || buildScanArguments();
+        }
       }
     }
 
@@ -128,13 +307,19 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
       setIsLoading(true);
       
       // 적절한 API 엔드포인트 선택
-      let endpoint = `${API_BASE_URL}/scan`;
-      if (scanType === 'quick') endpoint = `${API_BASE_URL}/scan/quick`;
-      else if (scanType === 'full') endpoint = `${API_BASE_URL}/scan/full`;
-      else endpoint = `${API_BASE_URL}/scan/custom`;
+      let endpoint;
+      if (options.useTestMode) {
+        endpoint = `${API_BASE_URL}/scan/test`; // 테스트 모드 엔드포인트 사용
+      } else {
+        if (scanType === 'quick') endpoint = `${API_BASE_URL}/scan/quick`;
+        else if (scanType === 'full') endpoint = `${API_BASE_URL}/scan/full`;
+        else endpoint = `${API_BASE_URL}/scan/custom`;
+      }
       
-      // API 호출
-      const response = await axios.post<{ scan_id: string }>(endpoint, scanData);
+      // 재시도 로직과 함께 API 호출
+      console.log(`스캔 요청 전송: ${endpoint}`, scanData);
+      const response = await callApiWithRetry('post', endpoint, scanData);
+      console.log('스캔 응답 받음:', response.data);
       
       if (response.data && response.data.scan_id) {
         setScanId(response.data.scan_id);
@@ -143,7 +328,19 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
       }
     } catch (err) {
       console.error('스캔 요청 실패:', err);
-      setError(err instanceof Error ? err.message : '스캔 요청이 실패했습니다.');
+      
+      // 직접 서버 상태 확인하여 더 명확한 오류 메시지 제공
+      const isAvailable = await checkServerStatus();
+      setServerAvailable(isAvailable);
+      
+      if (!isAvailable) {
+        setError('백엔드 서버에 연결할 수 없습니다. 서버 상태를 확인해주세요.');
+      } else {
+        setError(err instanceof Error ? 
+          `스캔 요청 실패: ${err.message}` : 
+          '스캔 요청이 실패했습니다. 네트워크 연결 상태를 확인해주세요.');
+      }
+      
       setIsLoading(false);
     }
   };
@@ -155,19 +352,26 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
       clearInterval(pollingInterval);
     }
     
+    console.log(`스캔 ID ${id}에 대한 폴링 시작...`);
+    
     // 새 폴링 인터벌 설정
     const interval = setInterval(async () => {
       try {
-        const response = await axios.get<ScanStatus>(`${API_BASE_URL}/scan/${id}`);
+        console.log(`스캔 상태 조회 중: ${id}`);
+        // 재시도 로직과 함께 상태 조회
+        const response = await callApiWithRetry('get', `${API_BASE_URL}/scan/${id}`);
+        console.log('스캔 상태 응답:', response.data);
         setScanStatus(response.data);
         
         // 완료 또는 실패 시 폴링 중지
         if (['completed', 'failed'].includes(response.data.status)) {
+          console.log(`스캔 ${id} ${response.data.status} 상태로 폴링 종료`);
           clearInterval(interval);
           setIsLoading(false);
           
           // 성공적으로 스캔이 완료되었고 결과가 있을 경우
           if (response.data.status === 'completed' && response.data.result) {
+            console.log('스캔 결과 처리 중...');
             if (onScanComplete) {
               onScanComplete(response.data.result);
             }
@@ -178,9 +382,19 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
         }
       } catch (err) {
         console.error('스캔 상태 조회 실패:', err);
-        clearInterval(interval);
-        setIsLoading(false);
-        setError('스캔 상태 조회에 실패했습니다.');
+        
+        // 서버 상태 확인
+        const isAvailable = await checkServerStatus();
+        setServerAvailable(isAvailable);
+        
+        if (!isAvailable) {
+          clearInterval(interval);
+          setIsLoading(false);
+          setError('백엔드 서버와의 연결이 끊어졌습니다. 서버 상태를 확인해주세요.');
+        } else {
+          // 일시적인 오류일 수 있으므로 폴링 계속 유지
+          console.log('폴링 계속 진행 중...');
+        }
       }
     }, 2000); // 2초마다 폴링
     
@@ -285,6 +499,22 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
 
   return (
     <div className="scan-form-container">
+      {!serverAvailable && (
+        <div className="server-status-alert">
+          <h3>서버 연결 문제</h3>
+          <p>백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.</p>
+          <button onClick={async () => {
+            const isAvailable = await checkServerStatus();
+            setServerAvailable(isAvailable);
+            if (isAvailable) {
+              setError('');
+            }
+          }}>
+            서버 상태 확인
+          </button>
+        </div>
+      )}
+      
       {isLoading || scanStatus ? (
         <div className="scan-status-container">
           <h2>스캔 상태</h2>
@@ -305,9 +535,9 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
                 </div>
                 
                 <div className="status-details">
-                  <p><strong>대상:</strong> {scanStatus.target}</p>
-                  <p><strong>모드:</strong> {getScanTypeLabel(scanStatus.mode)}</p>
-                  <p><strong>스캔 ID:</strong> {scanStatus.scan_id}</p>
+                  <p><strong>대상:</strong> {scanStatus.target || '정보 없음'}</p>
+                  <p><strong>모드:</strong> {getScanTypeLabel(scanStatus.mode) || '정보 없음'}</p>
+                  <p><strong>스캔 ID:</strong> {scanStatus.scan_id || '정보 없음'}</p>
                   
                   {scanStatus.end_time && (
                     <p><strong>소요 시간:</strong> {Math.round(scanStatus.duration || 0)}초</p>
@@ -360,61 +590,71 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
           {error && <div className="error-message">{error}</div>}
 
           <div className="form-group">
-            <label htmlFor="target">대상 주소</label>
+            <label htmlFor="target">대상 IP 주소/범위/도메인</label>
             <input
               type="text"
               id="target"
               value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              placeholder="예: 192.168.1.1 또는 example.com"
-              required
+              onChange={e => setTarget(e.target.value)}
+              placeholder="예: 192.168.1.1, 192.168.1.0/24, example.com"
+              disabled={isLoading}
             />
-            <div className="hint">단일 IP, IP 범위(CIDR), 또는 도메인</div>
           </div>
 
           <div className="form-group">
             <label>스캔 유형</label>
             <div className="scan-type-options">
-              <label className="radio-label">
+              <label className={`scan-type-option ${scanType === 'quick' ? 'selected' : ''}`}>
                 <input
                   type="radio"
                   name="scanType"
                   value="quick"
                   checked={scanType === 'quick'}
                   onChange={() => setScanType('quick')}
+                  disabled={isLoading}
                 />
-                <div className="radio-info">
-                  <span className="radio-title">빠른 스캔: </span>
-                  <span className="radio-description">일반적인 포트만 빠르게 스캔합니다</span>
-                </div>
+                <span>빠른 스캔: </span>
+                <small>일반적인 포트만 빠르게 스캔</small>
               </label>
-              <label className="radio-label">
+              
+              <label className={`scan-type-option ${scanType === 'full' ? 'selected' : ''}`}>
                 <input
                   type="radio"
                   name="scanType"
                   value="full"
                   checked={scanType === 'full'}
                   onChange={() => setScanType('full')}
+                  disabled={isLoading}
                 />
-                <div className="radio-info">
-                  <span className="radio-title">전체 스캔: </span>
-                  <span className="radio-description">모든 포트와 OS를 심층 스캔합니다 (시간 소요)</span>
-                </div>
+                <span>전체 스캔: </span>
+                <small>모든 포트와 OS 정보 스캔 (시간 소요)</small>
               </label>
-              <label className="radio-label">
+              
+              <label className={`scan-type-option ${scanType === 'custom' ? 'selected' : ''}`}>
                 <input
                   type="radio"
                   name="scanType"
                   value="custom"
                   checked={scanType === 'custom'}
                   onChange={() => setScanType('custom')}
+                  disabled={isLoading}
                 />
-                <div className="radio-info">
-                  <span className="radio-title">사용자 정의: </span>
-                  <span className="radio-description">포트 범위와 스캔 옵션을 직접 지정합니다</span>
-                </div>
+                <span>사용자 정의: </span>
+                <small>스캔 설정 직접 지정</small>
               </label>
             </div>
+          </div>
+
+          <div className="form-group">
+            <label className="scan-option">
+              <input
+                type="checkbox"
+                checked={options.useTestMode}
+                onChange={() => handleOptionChange('useTestMode')}
+                disabled={isLoading}
+              />
+              <span>테스트 모드 사용 (실제 nmap 실행 없이 테스트 데이터 사용)</span>
+            </label>
           </div>
 
           {scanType === 'custom' && (
@@ -484,8 +724,8 @@ const ScanForm: React.FC<ScanFormProps> = ({ onScanComplete, onNodeSelect: propN
             </>
           )}
 
-          <button type="submit" className={isLoading ? 'loading' : ''} disabled={isLoading}>
-            {isLoading ? '처리 중...' : '스캔 시작'}
+          <button type="submit" disabled={isLoading} className="scan-button">
+            {isLoading ? '스캔 중...' : '스캔 시작'}
           </button>
         </form>
       )}
@@ -510,6 +750,7 @@ function getScanTypeLabel(scanType: string): string {
     case 'quick': return '빠른 스캔';
     case 'full': return '전체 스캔';
     case 'custom': return '사용자 정의 스캔';
+    case 'test': return '테스트 모드';
     default: return scanType;
   }
 }

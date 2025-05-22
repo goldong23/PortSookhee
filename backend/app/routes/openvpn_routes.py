@@ -6,6 +6,9 @@ import tempfile
 import shutil
 import uuid
 import hashlib
+import platform  # 운영체제 확인을 위해 추가
+import signal    # 프로세스 관리를 위해 추가
+import psutil    # 프로세스 관리를 위해 추가 (새로운 의존성)
 from datetime import datetime
 import time as time_module
 from werkzeug.utils import secure_filename
@@ -13,6 +16,11 @@ from bson.objectid import ObjectId
 
 openvpn_bp = Blueprint('openvpn', __name__)
 logger = logging.getLogger('app.openvpn')
+
+# 운영체제 확인
+IS_WINDOWS = platform.system() == 'Windows'
+IS_MACOS = platform.system() == 'Darwin'
+IS_LINUX = platform.system() == 'Linux'
 
 # OpenVPN 영구 설정 파일 저장 디렉토리
 OPENVPN_CONFIG_DIR = os.environ.get('OPENVPN_CONFIG_DIR', os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'uploads', 'openvpn'))
@@ -31,6 +39,94 @@ upload_status = {}
 # 연결 상태 변경 추적을 위한 ETag 저장소
 connection_etags = {}
 connection_last_modified = {}
+
+# OpenVPN 실행 파일 찾기
+def find_openvpn_path():
+    """운영체제에 맞게 OpenVPN 실행 파일 경로 찾기"""
+    if IS_WINDOWS:
+        # Windows에서의 일반적인 OpenVPN 설치 경로들
+        possible_paths = [
+            r'C:\Program Files\OpenVPN\bin\openvpn.exe',
+            r'C:\Program Files (x86)\OpenVPN\bin\openvpn.exe',
+            os.environ.get('PROGRAMFILES', '') + r'\OpenVPN\bin\openvpn.exe',
+            os.environ.get('PROGRAMFILES(X86)', '') + r'\OpenVPN\bin\openvpn.exe'
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+        return None
+    elif IS_MACOS:
+        # macOS - Homebrew 설치 경로 확인
+        possible_paths = [
+            '/opt/homebrew/sbin/openvpn',
+            '/usr/local/sbin/openvpn',
+            '/usr/local/bin/openvpn',
+            '/opt/homebrew/bin/openvpn'
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+        try:
+            return subprocess.check_output(['which', 'openvpn'], text=True).strip()
+        except:
+            return None
+    else:  # Linux
+        try:
+            return subprocess.check_output(['which', 'openvpn'], text=True).strip()
+        except:
+            # 일반적인 Linux 설치 경로 확인
+            possible_paths = [
+                '/usr/sbin/openvpn',
+                '/usr/bin/openvpn',
+                '/sbin/openvpn'
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    return path
+            return None
+
+# 프로세스 종료 함수
+def kill_openvpn_process(process_id=None, connection_id=None):
+    """플랫폼에 맞게 OpenVPN 프로세스 종료"""
+    if process_id:
+        try:
+            if IS_WINDOWS:
+                # Windows에서는 taskkill 사용
+                subprocess.run(['taskkill', '/F', '/PID', str(process_id)], timeout=5, capture_output=True)
+            else:
+                # Unix 계열에서는 kill 사용
+                os.kill(process_id, signal.SIGTERM)
+                time_module.sleep(1)
+                # 프로세스가 여전히 살아있는지 확인
+                try:
+                    os.kill(process_id, 0)
+                    # 여전히 살아있으면 강제 종료
+                    os.kill(process_id, signal.SIGKILL)
+                except OSError:
+                    pass  # 프로세스가 이미 종료됨
+        except Exception as e:
+            logger.error(f"프로세스 종료 오류 (PID {process_id}): {str(e)}")
+    
+    # connection_id로 관련 프로세스 검색 및 종료
+    if connection_id:
+        try:
+            if IS_WINDOWS:
+                # Windows에서는 psutil을 사용하여 수동으로 검색 및 종료
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        cmd_line = ' '.join(proc.info['cmdline'] or [])
+                        if 'openvpn' in proc.info['name'].lower() and connection_id in cmd_line:
+                            proc.terminate()
+                            time_module.sleep(1)
+                            if proc.is_running():
+                                proc.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+            else:
+                # Unix 계열에서는 pkill 명령어 사용
+                subprocess.run(['pkill', '-f', f'openvpn.*{connection_id}'], timeout=5, capture_output=True)
+        except Exception as e:
+            logger.error(f"관련 프로세스 종료 오류 (Connection ID {connection_id}): {str(e)}")
 
 # 앱 시작 시 openvpns 컬렉션 인덱스 생성 및 VPN 연결 정리
 def setup_openvpn_indexes():
@@ -80,11 +176,27 @@ def cleanup_vpn_processes():
                     except:
                         pass
                     
-        # pkill로 남은 프로세스 정리
-        try:
-            subprocess.run(['sudo', 'pkill', '-f', 'openvpn'], timeout=5)
-        except:
-            pass
+        # 남은 프로세스 정리 (플랫폼에 맞게)
+        if IS_WINDOWS:
+            # Windows에서는 psutil을 사용하여 OpenVPN 프로세스 찾기
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    if 'openvpn' in proc.info['name'].lower():
+                        proc.terminate()
+                        time_module.sleep(1)
+                        if proc.is_running():
+                            proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        else:
+            # Unix 계열에서는 pkill 사용
+            try:
+                subprocess.run(['sudo', 'pkill', '-f', 'openvpn'], timeout=5)
+            except:
+                try:
+                    subprocess.run(['pkill', '-f', 'openvpn'], timeout=5)
+                except:
+                    pass
             
         logger.info("모든 VPN 프로세스 정리 완료")
     except Exception as e:
@@ -600,7 +712,7 @@ def validate_ovpn_file(file_path):
         print(f"디버깅: 파일 검증 중 예외 발생: {str(e)}")
         return False, f"파일 검증 중 오류 발생: {str(e)}"
 
-@openvpn_bp.route('/connect', methods=['POST'])
+@openvpn_bp.route('/connect', methods=['POST']) # OpenVPN 연결 문제 수정
 def connect_vpn():
     """업로드된 OpenVPN 설정 파일로 연결을 시작합니다."""
     print("디버깅: connect_vpn 함수 호출됨")
@@ -665,11 +777,8 @@ def connect_vpn():
             except:
                 pass
                 
-        # 기존 프로세스 정리
-        try:
-            subprocess.run(['pkill', '-f', f'openvpn.*{connection_id}'], capture_output=True, text=True)
-        except:
-            pass
+        # 기존 프로세스 정리 (플랫폼에 맞게)
+        kill_openvpn_process(connection_id=connection_id)
         
         # 설정 파일 검증
         is_valid, validation_msg = validate_ovpn_file(config_path)
@@ -698,16 +807,15 @@ def connect_vpn():
             
         print(f"디버깅: 설정 파일 검증 성공: {validation_msg}")
         
-        # OpenVPN 위치 확인
-        try:
-            openvpn_path = subprocess.check_output(['which', 'openvpn'], text=True).strip()
-        except:
-            openvpn_path = '/opt/homebrew/sbin/openvpn'
+        # 플랫폼에 맞게 OpenVPN 경로 찾기
+        openvpn_path = find_openvpn_path()
             
-        if not os.path.exists(openvpn_path):
+        if not openvpn_path or not os.path.exists(openvpn_path):
+            error_msg = f"OpenVPN 실행 파일을 찾을 수 없습니다. 설치 여부를 확인하세요."
+            logger.error(error_msg)
             return jsonify({
                 'error': 'Configuration Error',
-                'message': f'OpenVPN 실행 파일을 찾을 수 없습니다: {openvpn_path}',
+                'message': error_msg,
                 'status': 'failed'
             }), 500
             
@@ -716,27 +824,44 @@ def connect_vpn():
         os.makedirs(logs_dir, exist_ok=True)
         log_file_path = os.path.join(logs_dir, f"openvpn_{connection_id}.log")
         
-        # 직접 원본 파일을 사용하는 단순화된 명령
-        # 참고: sudo python run.py로 Flask 서버를 실행해야 합니다!
-        cmd = [
-            openvpn_path,
-            '--config', config_path,  # 원본 설정 파일 사용
-            '--log', log_file_path
-        ]
+        # Windows에서는 경로에 공백이 있을 경우 따옴표로 감싸기
+        if IS_WINDOWS and (' ' in config_path or ' ' in log_file_path):
+            config_path = f'"{config_path}"'
+            log_file_path = f'"{log_file_path}"'
         
-        print(f"디버깅: 원본 설정 파일 사용: {config_path}")
-            
+        # OpenVPN 명령
+        cmd = [openvpn_path, '--config', config_path, '--log', log_file_path]
+        
         print(f"디버깅: OpenVPN 명령: {' '.join(cmd)}")
         
         # OpenVPN 프로세스 시작
         try:
-            # 프로세스를 분리된 모드로 실행
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            # Windows에서는 관리자 권한이 필요할 수 있음
+            if IS_WINDOWS:
+                # startupinfo 객체를 생성하여 창 숨김 설정
+                import subprocess
+                startupinfo = None
+                if hasattr(subprocess, 'STARTUPINFO'):
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = 0  # 창 숨김
+                
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,  # 콘솔 창 숨기기
+                    startupinfo=startupinfo
+                )
+            else:
+                # Unix 계열에서는 일반 시작
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
             
             # 현재 시간
             now = datetime.now()
@@ -744,7 +869,7 @@ def connect_vpn():
             # 상태 업데이트
             connection['status'] = 'connecting'
             connection['started_at'] = now.isoformat()
-            connection['log_file'] = log_file_path  # 작업 디렉토리 대신 로그 파일 경로 저장
+            connection['log_file'] = log_file_path
             vpn_processes[connection_id] = process
             
             print(f"디버깅: OpenVPN 프로세스 시작 (PID: {process.pid})")
@@ -914,7 +1039,7 @@ def connect_vpn():
                 'status': 'failed'
             }), 500
             
-    except Exception as e:
+    except Exception as e: # TODO: 현재 오류 발생 지점.
         error_msg = f"OpenVPN 연결 중 오류: {str(e)}"
         print(f"디버깅: {error_msg}")
         logger.error(error_msg, exc_info=True)
@@ -1023,14 +1148,14 @@ def disconnect_vpn():
         else:
             print(f"디버깅: 실행 중인 프로세스가 없음")
         
-        # PKill로 OpenVPN 프로세스 정리 (백업)
+        # 플랫폼에 맞게 OpenVPN 프로세스 정리
+        print(f"디버깅: 플랫폼에 맞는 방식으로 프로세스 정리")
         try:
-            print(f"디버깅: pkill 명령으로 프로세스 정리")
-            # Flask 서버가 sudo로 실행 중이어야 합니다
-            subprocess.run(['pkill', '-f', f'openvpn.*{connection_id}'], capture_output=True, text=True)
-            print(f"디버깅: pkill 명령 완료")
-        except Exception as pkill_err:
-            print(f"디버깅: pkill 명령 오류: {str(pkill_err)}")
+            kill_openvpn_process(connection_id=connection_id)
+            print(f"디버깅: 프로세스 정리 완료")
+        except Exception as kill_err:
+            print(f"디버깅: 프로세스 정리 오류: {str(kill_err)}")
+            logger.error(f"프로세스 정리 오류: {str(kill_err)}")
         
         # 현재 시간
         now = datetime.now()
@@ -1097,36 +1222,49 @@ def disconnect_vpn():
 def check_openvpn():
     """OpenVPN 설치 여부를 확인합니다."""
     try:
-        result = subprocess.run(['which', 'openvpn'], 
-                               stdout=subprocess.PIPE, 
-                               stderr=subprocess.PIPE, 
-                               text=True)
+        openvpn_path = find_openvpn_path()
         
-        if result.returncode == 0:
-            openvpn_path = result.stdout.strip()
-            
-            # 버전 확인
-            version_result = subprocess.run(['openvpn', '--version'], 
-                                           stdout=subprocess.PIPE, 
-                                           stderr=subprocess.PIPE, 
-                                           text=True)
-            
-            return jsonify({
-                'installed': True,
-                'path': openvpn_path,
-                'version': version_result.stdout.split('\n')[0] if version_result.returncode == 0 else 'Unknown'
-            })
-        else:
+        if not openvpn_path:
             return jsonify({
                 'installed': False,
                 'message': 'OpenVPN이 설치되어 있지 않습니다.'
             })
             
+        # 버전 정보 확인
+        try:
+            version_output = subprocess.check_output([openvpn_path, '--version'], 
+                                                     stderr=subprocess.STDOUT, 
+                                                     text=True, 
+                                                     timeout=5)
+            
+            version = "알 수 없음"
+            for line in version_output.splitlines():
+                if "OpenVPN" in line:
+                    version = line.strip()
+                    break
+                    
+            return jsonify({
+                'installed': True,
+                'path': openvpn_path,
+                'version': version,
+                'is_windows': IS_WINDOWS,
+                'is_macos': IS_MACOS,
+                'is_linux': IS_LINUX
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'installed': True,
+                'path': openvpn_path,
+                'version': '확인 불가',
+                'message': f'버전 확인 중 오류: {str(e)}'
+            })
+            
     except Exception as e:
-        logger.error(f"OpenVPN 확인 오류: {str(e)}", exc_info=True)
         return jsonify({
-            'error': 'Internal Server Error',
-            'message': f'OpenVPN 확인에 실패했습니다: {str(e)}'
+            'installed': False,
+            'error': str(e),
+            'message': 'OpenVPN 확인 중 오류가 발생했습니다.'
         }), 500
 
 @openvpn_bp.route('/install-guide', methods=['GET'])
